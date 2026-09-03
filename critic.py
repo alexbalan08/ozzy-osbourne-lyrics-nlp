@@ -1,33 +1,16 @@
-"""Fact-check claims about Ozzy's discography against the album KB (RAG).
-
-The pipeline is the point:
-
-    claim -> embed -> retrieve the most relevant album cards from data/kb
-          -> hand those cards to Claude as the ONLY evidence
-          -> get back a structured verdict
-
-Grounding the model this way is what stops it answering release-year questions
-from memory. If the retrieved cards do not contain the fact, the correct answer
-is UNVERIFIABLE -- the model is told not to fall back on what it happens to know.
-
-    python critic.py                                  # run the demo claims
-    python critic.py "Crazy Train came out in 1982"   # check one claim
-
-Needs credentials: set ANTHROPIC_API_KEY, or run `ant auth login`.
-Needs the index: run `python retrieval.py` first.
-"""
 
 import sys
 from functools import lru_cache
 from typing import Literal
 
-import anthropic
-from pydantic import BaseModel, Field
+import torch
+from pydantic import BaseModel, Field, ValidationError
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from retrieval import Retriever
 
-MODEL = "claude-opus-5"
-MAX_TOKENS = 16000
+MODEL = "meta-llama/Llama-3.1-8B-Instruct"
+MAX_NEW_TOKENS = 400
 TOP_K = 3
 
 SYSTEM = """You fact-check claims about Ozzy Osbourne's discography.
@@ -47,11 +30,24 @@ Rules:
 - The knowledge base holds original studio-album tracklists only. A song missing
   from the cards may still exist on a live album or compilation, so absence is
   UNVERIFIABLE rather than CONTRADICTED.
-- Quote the exact line you relied on in `evidence`. If nothing applies, say so."""
+- Quote the exact line you relied on in `evidence`. If nothing applies, say so.
+
+Respond with ONLY a single JSON object, no markdown fences and no text before or
+after it, matching exactly this schema:
+
+{"verdict": "SUPPORTED" | "CONTRADICTED" | "UNVERIFIABLE",
+ "evidence": "<the exact line from a card that decides it>",
+ "explanation": "<one or two sentences of reasoning>",
+ "correction": "<the correct fact, only if CONTRADICTED, else null>"}"""
+
+REPAIR = (
+    "That was not a single valid JSON object matching the schema. "
+    "Reply with ONLY the corrected JSON object, no other text."
+)
 
 
 class Verdict(BaseModel):
-    """The structured judgement Claude must return."""
+    """The structured judgement the model must return."""
 
     verdict: Literal["SUPPORTED", "CONTRADICTED", "UNVERIFIABLE"]
     evidence: str = Field(description="The exact line from a card that decides it")
@@ -63,13 +59,19 @@ class Verdict(BaseModel):
 
 @lru_cache(maxsize=1)
 def _clients():
-    """Retriever and API client, built once and reused."""
-    return Retriever(), anthropic.Anthropic()
+    """Retriever, tokenizer and model, built once and reused."""
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA GPU required to run the local critic model (none detected).")
+
+    tokenizer = AutoTokenizer.from_pretrained(MODEL)
+    model = AutoModelForCausalLM.from_pretrained(MODEL, dtype=torch.bfloat16, device_map="cuda")
+    model.eval()
+    return Retriever(), tokenizer, model
 
 
 def build_context(claim, k=TOP_K):
     """Retrieve the album cards that should decide this claim."""
-    retriever, _ = _clients()
+    retriever, _, _ = _clients()
     hits = retriever.search_kb(claim, k=k)
     cards = "\n\n".join(
         f"--- ALBUM CARD {i} (relevance {h['score']:.3f}) ---\n{h['card']}"
@@ -78,22 +80,61 @@ def build_context(claim, k=TOP_K):
     return cards, hits
 
 
+def _extract_json(text):
+    """Pull the first top-level {...} object out of raw model text."""
+    text = text.strip().strip("`")
+    if text.startswith("json"):
+        text = text[4:]
+    start = text.find("{")
+    if start == -1:
+        raise ValueError(f"no JSON object in model output: {text!r}")
+    depth = 0
+    for i, ch in enumerate(text[start:], start):
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    raise ValueError(f"unterminated JSON object in model output: {text!r}")
+
+
+def _generate(tokenizer, model, messages):
+    """Run one chat turn through the model and decode only the new tokens."""
+    inputs = tokenizer.apply_chat_template(
+        messages, add_generation_prompt=True, return_tensors="pt", return_dict=True
+    ).to(model.device)
+    with torch.no_grad():
+        output_ids = model.generate(
+            **inputs,
+            max_new_tokens=MAX_NEW_TOKENS,
+            do_sample=False,
+            pad_token_id=tokenizer.eos_token_id,
+        )
+    reply_ids = output_ids[0, inputs["input_ids"].shape[1] :]
+    return tokenizer.decode(reply_ids, skip_special_tokens=True)
+
+
 def check_claim(claim, k=TOP_K):
     """Fact-check one claim. Returns (Verdict, retrieved hits)."""
     cards, hits = build_context(claim, k)
-    _, client = _clients()
+    _, tokenizer, model = _clients()
 
-    response = client.messages.parse(
-        model=MODEL,
-        max_tokens=MAX_TOKENS,
-        system=SYSTEM,
-        messages=[{
-            "role": "user",
-            "content": f"{cards}\n\n--- CLAIM ---\n{claim}",
-        }],
-        output_format=Verdict,
-    )
-    return response.parsed_output, hits
+    messages = [
+        {"role": "system", "content": SYSTEM},
+        {"role": "user", "content": f"{cards}\n\n--- CLAIM ---\n{claim}"},
+    ]
+    reply = _generate(tokenizer, model, messages)
+    try:
+        verdict = Verdict.model_validate_json(_extract_json(reply))
+    except (ValueError, ValidationError):
+        # 8B models occasionally wrap the JSON in prose despite instructions --
+        # give the model one chance to see its own mistake and fix it.
+        messages += [{"role": "assistant", "content": reply}, {"role": "user", "content": REPAIR}]
+        reply = _generate(tokenizer, model, messages)
+        verdict = Verdict.model_validate_json(_extract_json(reply))
+
+    return verdict, hits
 
 
 DEMO_CLAIMS = [
@@ -116,14 +157,19 @@ def main():
         print(f"\n{'=' * 70}\nCLAIM: {claim}")
         try:
             verdict, hits = check_claim(claim)
-        except anthropic.AuthenticationError:
-            sys.exit("No credentials. Set ANTHROPIC_API_KEY or run `ant auth login`.")
-        except anthropic.RateLimitError as exc:
-            sys.exit(f"Rate limited: {exc}")
-        except anthropic.APIStatusError as exc:
-            sys.exit(f"API error {exc.status_code}: {exc.message}")
-        except anthropic.APIConnectionError:
-            sys.exit("Network error reaching the API.")
+        except RuntimeError as exc:
+            sys.exit(str(exc))
+        except torch.cuda.OutOfMemoryError:
+            sys.exit(f"Out of GPU memory running {MODEL}.")
+        except OSError as exc:
+            sys.exit(
+                f"Could not load {MODEL}: {exc}\n"
+                "If this is a gated-repo access error, run `huggingface-cli login` "
+                "with an account that has accepted the Llama 3.1 license."
+            )
+        except (ValueError, ValidationError) as exc:
+            print(f"  -> could not parse a verdict from the model: {exc}")
+            continue
 
         print(f"retrieved: {', '.join(h['album'] for h in hits)}")
         print(f"  -> {verdict.verdict}")
