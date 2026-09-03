@@ -1,0 +1,262 @@
+[
+  {
+    "album": "Blizzard of Ozz",
+    "release_date": "1980-09-12",
+    "year": 1980,
+    "is_covers": false,
+    "tracks": [
+      "I Don't Know",
+      "Crazy Train",
+      "Goodbye to Romance",
+      "Dee",
+      "Suicide Solution",
+      "Mr. Crowley",
+      "No Bone Movies",
+      "Revelation (Mother Earth)",
+      "Steal Away (The Night)"
+    ],
+    "source": "https://en.wikipedia.org/wiki/Blizzard_of_Ozz",
+    "date_note": "Earliest release: UK, 12 September 1980. US release followed on 1981-03-27."
+  },
+  {
+    "album": "Diary of a Madman",
+    "release_date": null,
+    "year": 1981,
+    "is_covers": false,
+    "tracks": [
+      "Over the Mountain",
+      "Flying High Again",
+      "You Can't Kill Rock and Roll",
+      "Believer",
+      "Little Dolls",
+      "Tonight",
+      "S.A.T.O.",
+      "Diary of a Madman"
+    ],
+    "source": "https://en.wikipedia.org/wiki/Diary_of_a_Madman_(album)",
+    "date_note": "Wikipedia gives only month-level precision, 'October 1981' -- no day in the infobox, the lead, or the Ozzy Osbourne discography table. Left null rather than inventing a day; sorted as 1981-10."
+  },
+  {
+    "album": "Bark at the Moon",
+    "release_date": "1983-11-14",
+    "year": 1983,
+    "is_covers": false,
+    "tracks": [
+      "Bark at the Moon",
+      "You're No Different",
+      "Now You See It (Now You Don't)",
+      "Rock 'n' Roll Rebel",
+      "Centre of Eternity",
+      "So Tired",
+      "Slow Down",
+      "Waiting for Darkness"
+    ],
+    "source": "https://en.wikipedia.org/wiki/Bark_at_the_Moon",
+    "bonus_tracks": [
+      "Spiders in the Night"
+    ],
+    "bonus_note": "Not on the original US release, so it is kept out of 'tracks'. Wikipedia: \"The track 'Spiders in the Night' was originally included only on the European, Australian, New Zealand and Greek releases, but was included on the 1995 CD reissue and the 2002 reissue, listed simply as 'Spiders.'\" The darklyrics scrape follows the 2002 reissue, where it is track 9.",
+    "date_note": "Earliest release: US, 14 November 1983. UK release followed on 1983-12-02."
+  },
+  {
+    "album": "The Ultimate Sin",
+    "release_date": "1986-01-24",
+    "year": 1986,
+    "is_covers": false,
+    "tracks": [
+      "The Ultimate Sin",
+      "Secret Loser",
+      "Never Know Why",
+      "Thank God for the Bomb",
+      "Never",
+      "Lightning Strikes",
+      "Killer of Giants",
+      "Fool Like You",
+      "Shot in the Dark"
+    ],
+    "source": "https://en.wikipedia.org/wiki/The_Ultimate_Sin",
+    "date_note": "Earliest release: US, 24 January 1986. UK release followed on 1986-02-10."
+  },
+  {
+    "album": "No Rest for the Wicked",
+    "release_date": "1988-09-28",
+    "year": 1988,
+    "is_covers": false,
+    "tracks": [
+      "Miracle Man",
+      "Devil's Daughter",
+      "Crazy Babies",
+      "Breakin' All the Rules",
+      "Bloodbath in Paradise",
+      "Fire in the Sky",
+      "Tattooed Dancer",
+      "Demon Alcohol",
+      "Hero"
+    ],
+    "source": "https://en.wikipedia.org/wiki/No_Rest_for_the_Wicked_(Ozzy_Osbourne_album)",
+    "date_note": "Earliest release: US, 28 September 1988 (day-level date from the Ozzy Osbourne discography table). The UK release was October 1988, no day given."
+  },
+  {
+    "album": "No More Tears",
+    "release_date": "1991-09-17",
+    "year": 1991,
+    "is_covers": false,
+    "tracks": [
+      "Mr. Tinkertrain",
+      "I Don't Want to Change the World",
+      "Mama, I'm Coming Home",
+      "Desire",
+      "No More Tears",
+      "S.I.N.",
+      "Hellraiser",
+      "Time After Time",
+      "Zombie Stomp",
+      "A.V.H.",
+      "Road to Nowhere"
+    ],
+    "source": "https://en.wikipedia.org/wiki/No_More_Tears",
+    "date_note": "Earliest release: US, 17 September 1991. UK release followed on 1991-10-07."
+  },
+  {
+    "album": "Ozzmosis",
+    "release_date": "1995-10-23",
+    "year": 1995,
+    "is_covers": false,
+    "tracks": [
+      "Perry Mason",
+      "I Just Want You",
+      "Ghost Behind My Eyes",
+      "Thunder Underground",
+      "See You on the Other Side",
+      "Tomorrow",
+      "Denial",
+      "My Little Man",
+      "My Jekyll Doesn't Hide",
+      "Old L.A. Tonight"
+    ],
+    "source": "https://en.wikipedia.org/wiki/Ozzmosis"
+  },
+  {
+    "album": "Down to Earth",
+    "release_date": "2001-10-16",
+    "year": 2001,
+    "is_covers": false,
+    "tracks": [
+      "Gets Me Through",
+      "Facing Hell",
+      "Dreamer",
+      "No Easy Way Out",
+      "That I Never Had",
+      "You Know... (Part 1)",
+      "Junkie",
+      "Running Out of Time",
+      "Black Illusion",
+      "Alive",
+      "Can You Hear Them?"
+    ],
+    "source": "https://en.wikipedia.org/wiki/Down_to_Earth_(Ozzy_Osbourne_album)"
+  },
+  {
+    "album": "Under Cover",
+    "release_date": "2005-11-01",
+    "year": 2005,
+    "is_covers": true,
+    "tracks": [
+      "Rocky Mountain Way",
+      "In My Life",
+      "Mississippi Queen",
+      "Go Now",
+      "Woman",
+      "21st Century Schizoid Man",
+      "All the Young Dudes",
+      "For What It's Worth",
+      "Good Times",
+      "Sunshine of Your Love",
+      "Fire",
+      "Working Class Hero",
+      "Sympathy for the Devil"
+    ],
+    "source": "https://en.wikipedia.org/wiki/Under_Cover_(Ozzy_Osbourne_album)"
+  },
+  {
+    "album": "Black Rain",
+    "release_date": "2007-05-22",
+    "year": 2007,
+    "is_covers": false,
+    "tracks": [
+      "Not Going Away",
+      "I Don't Wanna Stop",
+      "Black Rain",
+      "Lay Your World on Me",
+      "The Almighty Dollar",
+      "11 Silver",
+      "Civilize the Universe",
+      "Here for You",
+      "Countdown's Begun",
+      "Trap Door"
+    ],
+    "source": "https://en.wikipedia.org/wiki/Black_Rain_(Ozzy_Osbourne_album)"
+  },
+  {
+    "album": "Scream",
+    "release_date": "2010-06-11",
+    "year": 2010,
+    "is_covers": false,
+    "tracks": [
+      "Let It Die",
+      "Let Me Hear You Scream",
+      "Soul Sucker",
+      "Life Won't Wait",
+      "Diggin' Me Down",
+      "Crucify",
+      "Fearless",
+      "Time",
+      "I Want It More",
+      "Latimer's Mercy",
+      "I Love You All"
+    ],
+    "source": "https://en.wikipedia.org/wiki/Scream_(Ozzy_Osbourne_album)",
+    "date_note": "Earliest release: Europe, 11 June 2010. Staggered elsewhere -- UK 2010-06-14, Australia 2010-06-18, US 2010-06-22, Japan 2010-06-23, Brazil 2010-06-24."
+  },
+  {
+    "album": "Ordinary Man",
+    "release_date": "2020-02-21",
+    "year": 2020,
+    "is_covers": false,
+    "tracks": [
+      "Straight to Hell",
+      "All My Life",
+      "Goodbye",
+      "Ordinary Man",
+      "Under the Graveyard",
+      "Eat Me",
+      "Today Is the End",
+      "Scary Little Green Men",
+      "Holy for Tonight",
+      "It's a Raid"
+    ],
+    "source": "https://en.wikipedia.org/wiki/Ordinary_Man_(Ozzy_Osbourne_album)"
+  },
+  {
+    "album": "Patient Number 9",
+    "release_date": "2022-09-09",
+    "year": 2022,
+    "is_covers": false,
+    "tracks": [
+      "Patient Number 9",
+      "Immortal",
+      "Parasite",
+      "No Escape from Now",
+      "One of Those Days",
+      "A Thousand Shades",
+      "Mr. Darkness",
+      "Nothing Feels Right",
+      "Evil Shuffle",
+      "Degradation Rules",
+      "Dead and Gone",
+      "God Only Knows",
+      "Darkside Blues"
+    ],
+    "source": "https://en.wikipedia.org/wiki/Patient_Number_9"
+  }
+]

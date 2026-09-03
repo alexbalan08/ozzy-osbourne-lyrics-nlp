@@ -1,0 +1,9 @@
+{
+  "model": "BAAI/bge-base-en-v1.5",
+  "dim": 768,
+  "counts": {
+    "songs": 181,
+    "kb": 13
+  },
+  "built_at": "2026-09-03T14:15:43"
+}
