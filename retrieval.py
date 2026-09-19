@@ -1,24 +1,4 @@
-"""Embedding + retrieval layer over the cleaned lyrics and the album KB.
 
-Press Run to build the indexes; import Retriever to query them.
-
-Two indexes, one per consumer:
-
-    songs   one vector per whole song (181)   -> song-similarity demo, and the
-                                                 corpus side of the critic
-    kb      one card per album (13)           -> fact grounding for the critic
-
-Whole songs are embedded directly rather than chunked or pooled: only 2 of 181
-exceed the model's 512-token window, so nothing meaningful is truncated. The
-critic judges style, theme and factual accuracy, all of which want the gist of a
-whole song rather than a fragment of one.
-
-(A passage-level index would only earn its place for line-by-line originality
-checking, where a single copied couplet has to spike a score. That is not what
-this critic does.)
-
-The model is loaded once, lazily, and reused by every call.
-"""
 
 import json
 import time
@@ -122,31 +102,27 @@ def build():
 
 
 class Retriever:
-    """Query the built indexes. Loads vectors on first use, model on first query."""
+    """Query the built indexes. Loads them on construction, the model on first query."""
 
     def __init__(self, index_dir=INDEX_DIR):
         self.dir = Path(index_dir)
         if not (self.dir / "meta.json").exists():
             raise FileNotFoundError(f"no index in {self.dir} -- run `python retrieval.py`")
-        self.meta = json.loads((self.dir / "meta.json").read_text(encoding="utf-8"))
+        self.meta = self._json("meta")
+        self.index = {
+            name: (np.load(self.dir / f"{name}.npy"), self._json(name))
+            for name in ("songs", "kb")
+        }
 
-    @lru_cache(maxsize=4)
-    def _index(self, name):
-        vectors = np.load(self.dir / f"{name}.npy")
-        rows = json.loads((self.dir / f"{name}.json").read_text(encoding="utf-8"))
-        return vectors, rows
+    def _json(self, name):
+        return json.loads((self.dir / f"{name}.json").read_text(encoding="utf-8"))
 
     def _top(self, name, vector, k, skip=()):
-        vectors, rows = self._index(name)
+        """The k best-scoring rows of an index, as dicts carrying their score."""
+        vectors, rows = self.index[name]
         scores = vectors @ vector
-        hits = []
-        for i in np.argsort(-scores):
-            if i in skip:
-                continue
-            hits.append({**rows[i], "score": round(float(scores[i]), 4)})
-            if len(hits) == k:
-                break
-        return hits
+        ranked = [i for i in np.argsort(-scores) if i not in skip][:k]
+        return [{**rows[i], "score": round(float(scores[i]), 4)} for i in ranked]
 
     def search(self, query, k=5, index="songs"):
         """Free-text query -> songs (or album cards, with index='kb')."""
@@ -158,11 +134,11 @@ class Retriever:
 
     def similar_songs(self, title, k=5):
         """Songs most like this one. Symmetric, so no query prefix."""
-        vectors, rows = self._index("songs")
-        matches = [i for i, r in enumerate(rows) if r["title"].lower() == title.lower()]
-        if not matches:
+        vectors, rows = self.index["songs"]
+        same = {i for i, r in enumerate(rows) if r["title"].lower() == title.lower()}
+        if not same:
             raise KeyError(f"no song titled {title!r}")
-        return self._top("songs", vectors[matches[0]], k, skip=set(matches))
+        return self._top("songs", vectors[min(same)], k, skip=same)
 
 
 def smoke_test():
