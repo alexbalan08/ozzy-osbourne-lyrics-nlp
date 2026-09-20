@@ -1,15 +1,10 @@
 """Clean the scraped darklyrics JSONL into plain text an LLM can read.
 
-Just press Run --- the paths below are relative to this file, so it works from
-any working directory. 
-
+Just press Run
 """
 
-
-
-#this script was generated mostly by claude and refined through multiple attempts until 
-#the produced output was correct
-
+# this script was generated mostly by claude and refined through multiple attempts until
+# the produced output was correct
 
 import json
 import re
@@ -22,29 +17,36 @@ OUTFILE = HERE / "Data" / "darklyrics_clean.jsonl"
 CORPUS = HERE / "Data" / "corpus.txt"
 
 
-FOLD_TO_ASCII = True
+# ---------- characters to fix ----------
 
-
-MOJIBAKE_RUN = re.compile(r"[^\x00-\x7f]{2,}")
-MOJIBAKE_CODECS = ("cp1252", "mac_roman", "latin-1")
-
+# Fancy punctuation -> plain ASCII. The last row is invisible characters that just go away.
 FOLD = {
     "‘": "'", "’": "'", "‚": "'", "‛": "'",
     "“": '"', "”": '"', "„": '"', "″": '"',
     "–": "-", "—": "-", "‒": "-", "―": "-", "−": "-",
     "…": "...",
+    "\ufeff": "", "\u200b": "", "\u200c": "", "\u200d": "",
+    "\u00ad": "", "\u200e": "", "\u200f": "", "\u2060": "",
 }
 
-FOLD.update(dict.fromkeys("﻿​‌‍­\u200E\u200F⁠", ""))
-FOLD = str.maketrans(FOLD)
+# Two or more non-ASCII characters in a row is usually mojibake:
+# UTF-8 text that was read with the wrong codec, e.g. "donâ€™t" instead of "don't".
+MOJIBAKE_RUN = re.compile(r"[^\x00-\x7f]{2,}")
+MOJIBAKE_CODECS = ["cp1252", "mac_roman", "latin-1"]
 
+# Control characters (except tab and newline) that should never be in lyrics.
 CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 
 
+# ---------- bracketed things ----------
+
+# A whole line that is only [something] or (something).
 BRACKET_LINE = re.compile(r"^[\[(]\s*([^\]\)]{1,300}?)\s*[\])]$")
+
+# A [something] or (something) sitting inside a lyric line.
 INLINE_TAG = re.compile(r"\s*[\[(]\s*([^\]\)\n]{1,60}?)\s*[\])]")
 
-
+# Stage directions like [Chorus], [Solo], [x4], [repeat 3 times].
 STAGE = re.compile(
     r"^(?:w/|"
     r"(?:chorus|verse|bridge|intro|outro|refrain|solo|instrumental|spoken|"
@@ -53,114 +55,119 @@ STAGE = re.compile(
     re.I,
 )
 
+# Editorial notes like (live), (bonus track), (feat. X). Not credits.
 NOTE = re.compile(
     r"\b(cover|bonus|b-side|feat\.?|featuring|version|remaster(ed)?|itunes|"
     r"japanese|demo|live|reprise|edit)\b",
     re.I,
 )
 
+# Songwriting credits look like "Osbourne - Rhoads - Daisley" or just "Zakk Wylde".
 NAME = r"[A-Z][\w.'\-]*(?:\s+[A-Z][\w.'\-]*)*"
-CREDIT = re.compile(rf"^{NAME}(?:\s*(?:-|,|&|and)\s*{NAME})+$")
+CREDIT = re.compile(rf"^{NAME}(?:\s*(?:-|,|&|and)\s*{NAME})+$")  # two or more names
+CREDIT_SOLO = re.compile(rf"^{NAME}$")  # a single name
 
-CREDIT_SOLO = re.compile(rf"^{NAME}$")
 
-
-def fix_mojibake(text):
-    """Repair UTF-8 that was decoded with the wrong single-byte codec."""
-
-    def repair(match):
-        run = match.group()
-        for codec in MOJIBAKE_CODECS:
-            try:
-                fixed = run.encode(codec).decode("utf-8")
-            except (UnicodeEncodeError, UnicodeDecodeError):
-                continue
-
-            if len(fixed) < len(run) and not CONTROL.search(fixed):
-                return fixed
-        return run
-
-    return MOJIBAKE_RUN.sub(repair, text)
+def repair_mojibake(match):
+    """re.sub calls this for every run of non-ASCII characters. Try to decode it properly."""
+    run = match.group()
+    for codec in MOJIBAKE_CODECS:
+        try:
+            fixed = run.encode(codec).decode("utf-8")
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            continue
+        # A real repair always gets shorter and never produces control characters.
+        if len(fixed) < len(run) and not CONTROL.search(fixed):
+            return fixed
+    return run  # could not repair it, leave it alone
 
 
 def normalize(text):
-    """Mojibake, unicode and whitespace in one pass. Returns clean lines."""
-    text = unicodedata.normalize("NFC", fix_mojibake(text))
-    if FOLD_TO_ASCII:
-        text = text.translate(FOLD)
+    """Fix mojibake, fold punctuation, drop control characters, tidy whitespace.
+
+    Returns a list of non-empty lines.
+    """
+    text = MOJIBAKE_RUN.sub(repair_mojibake, text)
+    text = unicodedata.normalize("NFC", text)
+    for old, new in FOLD.items():
+        text = text.replace(old, new)
     text = CONTROL.sub("", text)
-    lines = (re.sub(r"\s+", " ", line).strip() for line in text.splitlines())
-    return [line for line in lines if line]
+
+    lines = []
+    for line in text.splitlines():
+        line = re.sub(r"\s+", " ", line).strip()
+        if line:
+            lines.append(line)
+    return lines
 
 
 def is_credit(tag, at_top):
-    """Is this bracketed line a songwriting credit rather than noise?
-
-    Stage directions are ruled out first: "[Chorus]" and "[SOLO]" also look
-    like capitalized surnames, so the name test would otherwise swallow them.
-    """
+    """Is this bracketed text a songwriting credit, rather than a stage direction or a note?"""
     tag = tag.strip().rstrip(":").strip()
+    # [Chorus] and [SOLO] also look like capitalized surnames, so rule those out first.
     if STAGE.match(tag) or NOTE.search(tag):
         return False
-    return bool(CREDIT.match(tag) or (at_top and CREDIT_SOLO.match(tag)))
+    if CREDIT.match(tag):
+        return True
+    # A single name only counts as a credit at the very top of the song.
+    if at_top and CREDIT_SOLO.match(tag):
+        return True
+    return False
+
+
+def drop_stage_tag(match):
+    """re.sub calls this for every inline [tag]. Remove stage directions, keep everything else."""
+    if STAGE.match(match.group(1)):
+        return ""
+    return match.group()
 
 
 def clean_song(raw):
-    """Split one lyric string into (body, credits). Brackets never survive."""
-    credits, body = [], []
-
-    def strip_stage(match):
-        """Stage directions can also trail a lyric line, e.g. "... [x5]"."""
-        return "" if STAGE.match(match.group(1)) else match.group()
-
-    for line in normalize(raw or ""):
+    """Split one raw lyric into (lyrics text, credits text)."""
+    body = []
+    credits = []
+    for line in normalize(raw):
         bracket = BRACKET_LINE.match(line)
         if bracket:
-            if is_credit(bracket.group(1), at_top=not body):
+            # A whole-line bracket is either a credit we keep or noise we drop. Never lyrics.
+            if is_credit(bracket.group(1), at_top=(len(body) == 0)):
                 credits.append(bracket.group(1))
             continue
-        line = INLINE_TAG.sub(strip_stage, line).strip()
+        line = INLINE_TAG.sub(drop_stage_tag, line).strip()
         if line:
             body.append(line)
-
     return "\n".join(body), "; ".join(credits)
 
 
-def main():
+if __name__ == "__main__":
     songs = []
     for line in INFILE.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
         record = json.loads(line)
-        lyrics, credits = clean_song(record.get("lyrics"))
+        lyrics, credits = clean_song(record["lyrics"])
         if not lyrics:
             continue  # instrumentals leave nothing behind
-        songs.append({
-            "title": " ".join(normalize(record.get("title") or "")),
-            "album": record.get("album"),
-            "credits": credits,
-            "lyrics": lyrics,
-        })
+        title = " ".join(normalize(record["title"]))
+        songs.append({"title": title, "album": record["album"], "credits": credits, "lyrics": lyrics})
 
-    OUTFILE.write_text(
-        "".join(json.dumps(s, ensure_ascii=False) + "\n" for s in songs),
-        encoding="utf-8",
-        newline="\n",
-    )
-    CORPUS.write_text(
-        "\n".join(
-            f"### {s['title']} - {s['album']}\n\n{s['lyrics']}\n" for s in songs
-        ),
-        encoding="utf-8",
-        newline="\n",
-    )
+    # One JSON object per line, for the code.
+    jsonl = ""
+    for song in songs:
+        jsonl += json.dumps(song, ensure_ascii=False) + "\n"
+    OUTFILE.write_text(jsonl, encoding="utf-8", newline="\n")
 
-    words = sum(len(s["lyrics"].split()) for s in songs)
-    print(f"wrote {len(songs)} songs | {words:,} words"
-          f" | {sum(1 for s in songs if s['credits'])} with credits")
-    print(f"  {OUTFILE.name} ({OUTFILE.stat().st_size // 1024} KB)"
-          f" | {CORPUS.name} ({CORPUS.stat().st_size // 1024} KB)")
+    # One readable text file, for humans.
+    chunks = []
+    for song in songs:
+        chunks.append(f"### {song['title']} - {song['album']}\n\n{song['lyrics']}\n")
+    CORPUS.write_text("\n".join(chunks), encoding="utf-8", newline="\n")
 
-
-if __name__ == "__main__":
-    main()
+    total_words = 0
+    with_credits = 0
+    for song in songs:
+        total_words += len(song["lyrics"].split())
+        if song["credits"]:
+            with_credits += 1
+    print(f"wrote {len(songs)} songs | {total_words:,} words | {with_credits} with credits")
+    print(f"  {OUTFILE.name} ({OUTFILE.stat().st_size // 1024} KB) | {CORPUS.name} ({CORPUS.stat().st_size // 1024} KB)")

@@ -1,164 +1,157 @@
+"""Embed the songs and the album cards, and search them.
 
+Press Run to build the two indexes. Import search / similar_songs to query them.
+
+    songs   one vector per whole song (181)   -> song similarity
+    kb      one vector per album card (13)    -> facts for the critic
+"""
 
 import json
 import time
-from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
+from sentence_transformers import SentenceTransformer
 
 HERE = Path(__file__).resolve().parent
-LYRICS = HERE / "Data" / "darklyrics_clean.jsonl"
-ALBUMS = HERE / "data" / "kb" / "albums.json"
-INDEX_DIR = HERE / "data" / "index"
+LYRICS_FILE = HERE / "Data" / "darklyrics_clean.jsonl"
+ALBUMS_FILE = HERE / "Data" / "kb" / "albums.json"
+INDEX_DIR = HERE / "Data" / "index"
 
 MODEL_NAME = "BAAI/bge-base-en-v1.5"
-BATCH_SIZE = 32
 
-# bge wants this prefix on short queries searching longer passages. It is NOT
-# used for song-to-song similarity, which compares two texts of the same kind.
+# bge wants this prefix on a short query that searches longer texts.
+# It is NOT used for song-to-song similarity, where both sides are the same kind of text.
 QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 
-
-@lru_cache(maxsize=1)
-def get_model():
-    """Load the encoder once and reuse it. Downloads ~440 MB on first call."""
-    from sentence_transformers import SentenceTransformer
-
-    return SentenceTransformer(MODEL_NAME, device="cpu")
+# Loaded once, when this file is imported. Downloads ~440 MB the first time.
+model = SentenceTransformer(MODEL_NAME, device="cpu")
 
 
-def encode(texts, prefix=""):
-    """Embed texts into L2-normalized vectors, so cosine similarity == dot."""
-    texts = list(texts)
-    if prefix:
-        texts = [prefix + t for t in texts]
-    return get_model().encode(
-        texts,
-        batch_size=BATCH_SIZE,
-        normalize_embeddings=True,
-        show_progress_bar=len(texts) > 200,
-    ).astype("float32")
-
-
-def load_songs():
-    return [
-        json.loads(line)
-        for line in LYRICS.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
+def embed(texts, prefix=""):
+    """Turn texts into unit-length vectors. Unit length means dot product == cosine similarity."""
+    with_prefix = []
+    for text in texts:
+        with_prefix.append(prefix + text)
+    vectors = model.encode(with_prefix, normalize_embeddings=True)
+    return vectors.astype("float32")
 
 
 def album_card(album):
-    """Flatten one KB album record into text worth embedding."""
-    parts = [
-        f"Album: {album['album']}",
-        f"Year: {album['year']}",
-        f"Released: {album['release_date'] or 'month-level only, see note'}",
-        "Covers album of songs by other artists" if album["is_covers"]
-        else "Album of original songs",
-        f"Tracks ({len(album['tracks'])}): " + ", ".join(album["tracks"]),
-    ]
+    """Turn one album record from albums.json into a short text we can embed."""
+    lines = []
+    lines.append(f"Album: {album['album']}")
+    lines.append(f"Year: {album['year']}")
+    if album["release_date"]:
+        lines.append(f"Released: {album['release_date']}")
+    else:
+        lines.append("Released: month-level only, see note")
+    if album["is_covers"]:
+        lines.append("Covers album of songs by other artists")
+    else:
+        lines.append("Album of original songs")
+    lines.append(f"Tracks ({len(album['tracks'])}): " + ", ".join(album["tracks"]))
     if album.get("bonus_tracks"):
-        parts.append("Bonus tracks: " + ", ".join(album["bonus_tracks"]))
-    return "\n".join(parts)
+        lines.append("Bonus tracks: " + ", ".join(album["bonus_tracks"]))
+    return "\n".join(lines)
 
 
-def save(name, vectors, meta):
-    np.save(INDEX_DIR / f"{name}.npy", vectors)
-    (INDEX_DIR / f"{name}.json").write_text(
-        json.dumps(meta, ensure_ascii=False, indent=1) + "\n", encoding="utf-8"
+def build_index():
+    """Embed every song and every album card, and save the vectors to Data/index/."""
+    INDEX_DIR.mkdir(parents=True, exist_ok=True)
+    start = time.time()
+
+    # songs: one vector per whole song
+    songs = []
+    for line in LYRICS_FILE.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            songs.append(json.loads(line))
+    lyrics = []
+    song_rows = []
+    for song in songs:
+        lyrics.append(song["lyrics"])
+        song_rows.append({
+            "title": song["title"],
+            "album": song["album"],
+            "credits": song["credits"],
+            "n_words": len(song["lyrics"].split()),
+        })
+    np.save(INDEX_DIR / "songs.npy", embed(lyrics))
+    (INDEX_DIR / "songs.json").write_text(
+        json.dumps(song_rows, ensure_ascii=False, indent=1) + "\n", encoding="utf-8"
     )
 
+    # kb: one vector per album card
+    albums = json.loads(ALBUMS_FILE.read_text(encoding="utf-8"))
+    cards = []
+    album_rows = []
+    for album in albums:
+        card = album_card(album)
+        cards.append(card)
+        album_rows.append({"album": album["album"], "year": album["year"], "card": card})
+    np.save(INDEX_DIR / "kb.npy", embed(cards))
+    (INDEX_DIR / "kb.json").write_text(
+        json.dumps(album_rows, ensure_ascii=False, indent=1) + "\n", encoding="utf-8"
+    )
 
-def build():
-    """Embed the corpus and the KB, and write both indexes to data/index/."""
-    songs = load_songs()
-    albums = json.loads(ALBUMS.read_text(encoding="utf-8"))
-    INDEX_DIR.mkdir(parents=True, exist_ok=True)
-    started = time.time()
-
-    save("songs", encode(s["lyrics"] for s in songs), [
-        {"title": s["title"], "album": s["album"], "credits": s["credits"],
-         "n_words": len(s["lyrics"].split())}
-        for s in songs
-    ])
-
-    cards = [album_card(a) for a in albums]
-    save("kb", encode(cards), [
-        {"album": a["album"], "year": a["year"], "card": c}
-        for a, c in zip(albums, cards)
-    ])
-
-    (INDEX_DIR / "meta.json").write_text(json.dumps({
-        "model": MODEL_NAME,
-        "dim": int(get_model().get_sentence_embedding_dimension()),
-        "counts": {"songs": len(songs), "kb": len(cards)},
-        "built_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-    }, indent=2) + "\n", encoding="utf-8")
-
-    print(f"built in {time.time() - started:.1f}s -> {INDEX_DIR}")
-    print(f"  songs {len(songs)} | kb {len(cards)}")
+    print(f"built the index in {time.time() - start:.1f} seconds -> {INDEX_DIR}")
+    print(f"  {len(songs)} songs | {len(albums)} album cards")
 
 
-class Retriever:
-    """Query the built indexes. Loads them on construction, the model on first query."""
-
-    def __init__(self, index_dir=INDEX_DIR):
-        self.dir = Path(index_dir)
-        if not (self.dir / "meta.json").exists():
-            raise FileNotFoundError(f"no index in {self.dir} -- run `python retrieval.py`")
-        self.meta = self._json("meta")
-        self.index = {
-            name: (np.load(self.dir / f"{name}.npy"), self._json(name))
-            for name in ("songs", "kb")
-        }
-
-    def _json(self, name):
-        return json.loads((self.dir / f"{name}.json").read_text(encoding="utf-8"))
-
-    def _top(self, name, vector, k, skip=()):
-        """The k best-scoring rows of an index, as dicts carrying their score."""
-        vectors, rows = self.index[name]
-        scores = vectors @ vector
-        ranked = [i for i in np.argsort(-scores) if i not in skip][:k]
-        return [{**rows[i], "score": round(float(scores[i]), 4)} for i in ranked]
-
-    def search(self, query, k=5, index="songs"):
-        """Free-text query -> songs (or album cards, with index='kb')."""
-        return self._top(index, encode([query], QUERY_PREFIX)[0], k)
-
-    def search_kb(self, query, k=3):
-        """Album facts, to ground a factual claim."""
-        return self.search(query, k, index="kb")
-
-    def similar_songs(self, title, k=5):
-        """Songs most like this one. Symmetric, so no query prefix."""
-        vectors, rows = self.index["songs"]
-        same = {i for i, r in enumerate(rows) if r["title"].lower() == title.lower()}
-        if not same:
-            raise KeyError(f"no song titled {title!r}")
-        return self._top("songs", vectors[min(same)], k, skip=same)
+def load_index(name):
+    """Load one saved index. name is "songs" or "kb". Returns (vectors, rows)."""
+    vectors = np.load(INDEX_DIR / f"{name}.npy")
+    rows = json.loads((INDEX_DIR / f"{name}.json").read_text(encoding="utf-8"))
+    return vectors, rows
 
 
-def smoke_test():
-    """Prove both consumers work off one loaded model."""
-    r = Retriever()
-    print(f"\nindex: {r.meta['counts']} | {r.meta['model']} | dim {r.meta['dim']}")
+def top_k(vectors, rows, query_vector, k, skip=()):
+    """The k rows whose vectors are most similar to query_vector, best first."""
+    scores = vectors @ query_vector  # cosine similarity, because every vector has unit length
+    hits = []
+    for i in np.argsort(-scores):  # row numbers sorted from highest score to lowest
+        if i in skip:
+            continue
+        hit = dict(rows[i])
+        hit["score"] = round(float(scores[i]), 4)
+        hits.append(hit)
+        if len(hits) == k:
+            break
+    return hits
 
-    print("\n-- kb lookup (grounds the critic) --")
-    for hit in r.search_kb("which album was the covers record", k=2):
-        print(f"  {hit['score']:.3f}  {hit['album']} ({hit['year']})")
 
-    print("\n-- corpus search (grounds the critic) --")
-    for hit in r.search("regret and looking back on a wasted life", k=3):
-        print(f"  {hit['score']:.3f}  {hit['title']} - {hit['album']}")
+def search(query, index_name, k=5):
+    """Free-text query -> the k most similar songs ("songs") or album cards ("kb")."""
+    vectors, rows = load_index(index_name)
+    query_vector = embed([query], QUERY_PREFIX)[0]
+    return top_k(vectors, rows, query_vector, k)
 
-    print("\n-- song similarity (the demo) --")
-    for hit in r.similar_songs("Crazy Train", k=3):
-        print(f"  {hit['score']:.3f}  {hit['title']} - {hit['album']}")
+
+def similar_songs(title, k=5):
+    """The k songs most like the given one. No query prefix: both sides are songs."""
+    vectors, rows = load_index("songs")
+    # The same title can appear on more than one album (studio + live), so find every
+    # copy and leave all of them out of the results.
+    positions = []
+    for i, row in enumerate(rows):
+        if row["title"].lower() == title.lower():
+            positions.append(i)
+    if not positions:
+        raise KeyError(f"no song titled {title!r}")
+    return top_k(vectors, rows, vectors[positions[0]], k, skip=positions)
 
 
 if __name__ == "__main__":
-    build()
-    smoke_test()
+    build_index()
+
+    print("\n-- kb lookup (grounds the critic) --")
+    for hit in search("which album was the covers record", "kb", k=2):
+        print(f"  {hit['score']:.3f}  {hit['album']} ({hit['year']})")
+
+    print("\n-- corpus search (grounds the critic) --")
+    for hit in search("regret and looking back on a wasted life", "songs", k=3):
+        print(f"  {hit['score']:.3f}  {hit['title']} - {hit['album']}")
+
+    print("\n-- song similarity (the demo) --")
+    for hit in similar_songs("Crazy Train", k=3):
+        print(f"  {hit['score']:.3f}  {hit['title']} - {hit['album']}")

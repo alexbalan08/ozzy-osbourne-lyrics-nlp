@@ -15,17 +15,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 If existing code could be simpler and still do its job, say so.
 
-## Environment
-
-Conda env `ozzy` (Python 3.12). Call the interpreter directly:
-
-    C:\Users\alext\anaconda3\envs\ozzy\python.exe <script>.py
-
-**torch must be the CUDA build** (currently `2.11.0+cu128`) because `critic.py` runs an 8B model on the GPU:
-
-    pip install --index-url https://download.pytorch.org/whl/cu128 torch --force-reinstall --no-deps
-
-Plain `pip install torch` may resolve to a CPU wheel; `retrieval.py` is fine with that, but `critic.py` then raises "CUDA GPU required". `--force-reinstall` is needed because pip treats an installed `+cpu` build as already satisfying `torch`.
 
 ## Commands
 
@@ -36,7 +25,7 @@ No test suite, no linter, no build step. Each script self-verifies when run dire
     python critic.py "Crazy Train is on Blizzard of Ozz."   # claims as argv instead
     python clean_lyrics.py  # regenerate darklyrics_clean.jsonl + corpus.txt
 
-`retrieval.py` must have run at least once before `critic.py` works — `Retriever.__init__` raises `FileNotFoundError` if `Data/index/meta.json` is missing.
+`retrieval.py` must have run at least once before `critic.py` works — otherwise `load_index` fails on the missing `Data/index/kb.npy`.
 
 `scrape_data.py` is **not runnable**. It is a Jupyter notebook exported to .py as documentation; its module-level code references `rows` and `spine`, which are never defined. Don't try to execute or "repair" it.
 
@@ -48,7 +37,7 @@ No test suite, no linter, no build step. Each script self-verifies when run dire
       -> Data/darklyrics_clean.jsonl    {title, album, credits, lyrics}
       -> Data/corpus.txt
     retrieval.py
-      -> Data/index/{songs,kb}.{npy,json} + meta.json
+      -> Data/index/{songs,kb}.{npy,json}
     critic.py                           consumes the kb index
 
 ## Architecture
@@ -58,23 +47,24 @@ No test suite, no linter, no build step. Each script self-verifies when run dire
 - `songs` — 181 vectors, one per whole song; powers `similar_songs()`.
 - `kb` — 13 vectors, one per album card; grounds the fact-checker.
 
-Vectors are L2-normalized, so the `vectors @ vector` dot product in `Retriever._top` *is* cosine similarity.
+Vectors are L2-normalized, so the `vectors @ query_vector` dot product in `top_k` *is* cosine similarity.
 
-Two things that are easy to get wrong:
+There is no class and no caching: `search` and `similar_songs` are plain functions that re-read the small `.npy`/`.json` files on every call, and both models (`bge` in `retrieval.py`, Llama in `critic.py`) load at module level when the file is imported. That is deliberate — don't wrap them in lazy loaders.
+
+One thing that is easy to get wrong:
 
 - `QUERY_PREFIX` belongs on **queries only** (`search`), never on song-to-song comparison (`similar_songs`), because BGE was trained asymmetrically.
-- BGE uses **CLS pooling, not mean pooling** — the vector is the `[CLS]` hidden state, not an average of token vectors. A whole song collapses into one 768-dim vector. Median song is 246 tokens against a 512-token window; exactly one song ("Don't Blame Me", 670 tokens) is truncated, losing its last quarter.
 
 **The critic** (`critic.py`) retrieves `TOP_K=3` album cards, supplies them as the only permitted source of truth, and returns SUPPORTED / CONTRADICTED / UNVERIFIABLE.
 
 The model is **local** `meta-llama/Llama-3.1-8B-Instruct` in bf16 on the GPU via `transformers` (~16 GB of weights, ~15 s first load, cached in the HF hub cache). It has no native structured-output API, so the schema is enforced by hand in four coupled pieces:
 
 1. `SYSTEM` states the JSON shape and forbids any other text.
-2. `_extract_json` brace-matches the first `{...}` out of the raw reply.
-3. The pydantic `Verdict` model validates it.
+2. `parse_verdict` cuts from the first `{` to the last `}` and `json.loads` it.
+3. It checks that `verdict` is one of the three allowed values; anything else counts as a failed parse (returns `None`).
 4. On failure, one repair turn feeds the bad output back and asks for corrected JSON.
 
-Changing the `Verdict` fields means updating the schema text inside `SYSTEM` too.
+The schema exists only as text inside `SYSTEM` plus the keys the print block reads — change one, change the other.
 
 **The KB encodes deliberate edge cases** (`Data/kb/albums.json`) that the critic's rules are written against:
 
@@ -86,6 +76,5 @@ Llama-3.1-8B does not reliably honour the month-level rule and tends to answer C
 
 ## Gotchas
 
-- **Path casing.** `retrieval.py` mixes `HERE / "Data"` (lyrics) with `HERE / "data"` (KB and index). It only works because Windows is case-insensitive; the committed directory is `Data/`. Normalize before running on Linux or macOS.
 - Despite the repo name, **the network-science half is not implemented** — there is no graph code yet, only the RAG half.
 - `Data/index/*.npy` and `__pycache__/` are committed, so rebuilding the index produces diff noise.

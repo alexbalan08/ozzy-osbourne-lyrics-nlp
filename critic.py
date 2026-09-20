@@ -1,17 +1,21 @@
+"""Fact-check claims about Ozzy's albums, using the album cards as the only source of truth.
 
+Run it with no arguments to check the demo claims, or pass your own claims:
+
+    python critic.py "Crazy Train is on Blizzard of Ozz."
+"""
+
+import json
 import sys
-from functools import lru_cache
-from typing import Literal
 
 import torch
-from pydantic import BaseModel, Field, ValidationError
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from retrieval import Retriever
+from retrieval import search
 
-MODEL = "meta-llama/Llama-3.1-8B-Instruct"
-MAX_NEW_TOKENS = 400
-TOP_K = 3
+MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
+MAX_NEW_TOKENS = 400  # the answer is a small JSON object, this is plenty of room
+TOP_K = 3  # how many album cards to show the model
 
 SYSTEM = """You fact-check claims about Ozzy Osbourne's discography.
 
@@ -45,139 +49,96 @@ REPAIR = (
     "Reply with ONLY the corrected JSON object, no other text."
 )
 
+DEMO_CLAIMS = [
+    "Crazy Train is on Blizzard of Ozz.",  # true
+    "Bark at the Moon was released in 1985.",  # wrong year, the card should contradict it
+    "Diary of a Madman was released on 7 November 1981.",  # the KB deliberately has no day for this one
+    "War Pigs is a track on Ozzy's album Blizzard of Ozz.",  # a Sabbath song, not on that tracklist
+    "Under Cover is an album of songs written by other artists.",  # covers-album flag
+]
 
-class Verdict(BaseModel):
-    """The structured judgement the model must return."""
-
-    verdict: Literal["SUPPORTED", "CONTRADICTED", "UNVERIFIABLE"]
-    evidence: str = Field(description="The exact line from a card that decides it")
-    explanation: str = Field(description="One or two sentences of reasoning")
-    correction: str | None = Field(
-        default=None, description="The correct fact, when the claim is contradicted"
-    )
-
-
-@lru_cache(maxsize=1)
-def _clients():
-    """Retriever, tokenizer and model, built once and reused."""
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA GPU required to run the local critic model (none detected).")
-
-    tokenizer = AutoTokenizer.from_pretrained(MODEL)
-    model = AutoModelForCausalLM.from_pretrained(MODEL, dtype=torch.bfloat16, device_map="cuda")
-    model.eval()
-    return Retriever(), tokenizer, model
+# Loaded once, when this file starts. Needs a CUDA GPU with ~16 GB free. Takes ~15 seconds.
+tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, dtype=torch.bfloat16, device_map="cuda")
 
 
-def build_context(claim, k=TOP_K):
-    """Retrieve the album cards that should decide this claim."""
-    retriever, _, _ = _clients()
-    hits = retriever.search_kb(claim, k=k)
-    cards = "\n\n".join(
-        f"--- ALBUM CARD {i} (relevance {h['score']:.3f}) ---\n{h['card']}"
-        for i, h in enumerate(hits, 1)
-    )
-    return cards, hits
-
-
-def _extract_json(text):
-    """Pull the first top-level {...} object out of raw model text."""
-    text = text.strip().strip("`")
-    if text.startswith("json"):
-        text = text[4:]
-    start = text.find("{")
-    if start == -1:
-        raise ValueError(f"no JSON object in model output: {text!r}")
-    depth = 0
-    for i, ch in enumerate(text[start:], start):
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                return text[start : i + 1]
-    raise ValueError(f"unterminated JSON object in model output: {text!r}")
-
-
-def _generate(tokenizer, model, messages):
-    """Run one chat turn through the model and decode only the new tokens."""
+def ask_model(messages):
+    """Send a chat (list of {"role", "content"} dicts) to Llama and return its reply as text."""
     inputs = tokenizer.apply_chat_template(
         messages, add_generation_prompt=True, return_tensors="pt", return_dict=True
-    ).to(model.device)
+    ).to("cuda")
     with torch.no_grad():
-        output_ids = model.generate(
+        output = model.generate(
             **inputs,
             max_new_tokens=MAX_NEW_TOKENS,
-            do_sample=False,
+            do_sample=False,  # always pick the most likely token, so the same input gives the same answer
             pad_token_id=tokenizer.eos_token_id,
         )
-    reply_ids = output_ids[0, inputs["input_ids"].shape[1] :]
-    return tokenizer.decode(reply_ids, skip_special_tokens=True)
+    new_tokens = output[0, inputs["input_ids"].shape[1]:]  # only what the model added
+    return tokenizer.decode(new_tokens, skip_special_tokens=True)
 
 
-def check_claim(claim, k=TOP_K):
-    """Fact-check one claim. Returns (Verdict, retrieved hits)."""
-    cards, hits = build_context(claim, k)
-    _, tokenizer, model = _clients()
+def parse_verdict(reply):
+    """Pull the JSON object out of the model's reply. Returns None if there isn't a usable one."""
+    start = reply.find("{")
+    end = reply.rfind("}")
+    if start == -1 or end == -1:
+        return None
+    try:
+        verdict = json.loads(reply[start:end + 1])
+    except json.JSONDecodeError:
+        return None
+    if verdict.get("verdict") not in ("SUPPORTED", "CONTRADICTED", "UNVERIFIABLE"):
+        return None
+    return verdict
+
+
+def check_claim(claim):
+    """Fact-check one claim. Returns (verdict dict or None, the album cards that were used)."""
+    hits = search(claim, "kb", k=TOP_K)
+
+    cards = ""
+    for i, hit in enumerate(hits, 1):
+        cards += f"--- ALBUM CARD {i} (relevance {hit['score']:.3f}) ---\n{hit['card']}\n\n"
 
     messages = [
         {"role": "system", "content": SYSTEM},
-        {"role": "user", "content": f"{cards}\n\n--- CLAIM ---\n{claim}"},
+        {"role": "user", "content": f"{cards}--- CLAIM ---\n{claim}"},
     ]
-    reply = _generate(tokenizer, model, messages)
-    try:
-        verdict = Verdict.model_validate_json(_extract_json(reply))
-    except (ValueError, ValidationError):
-        # 8B models occasionally wrap the JSON in prose despite instructions --
-        # give the model one chance to see its own mistake and fix it.
-        messages += [{"role": "assistant", "content": reply}, {"role": "user", "content": REPAIR}]
-        reply = _generate(tokenizer, model, messages)
-        verdict = Verdict.model_validate_json(_extract_json(reply))
+    reply = ask_model(messages)
+    verdict = parse_verdict(reply)
+
+    if verdict is None:
+        # Small models sometimes wrap the JSON in prose. Show the model its mistake and ask once more.
+        messages.append({"role": "assistant", "content": reply})
+        messages.append({"role": "user", "content": REPAIR})
+        reply = ask_model(messages)
+        verdict = parse_verdict(reply)
 
     return verdict, hits
 
 
-DEMO_CLAIMS = [
-    # true
-    "Crazy Train is on Blizzard of Ozz.",
-    # wrong year -- the card should contradict it
-    "Bark at the Moon was released in 1985.",
-    # the KB deliberately has no day for this one
-    "Diary of a Madman was released on 7 November 1981.",
-    # a Sabbath song, absent from the studio KB
-    "War Pigs is a track on Ozzy's album Blizzard of Ozz.",
-    # covers-album flag
-    "Under Cover is an album of songs written by other artists.",
-]
-
-
-def main():
-    claims = sys.argv[1:] or DEMO_CLAIMS
-    for claim in claims:
-        print(f"\n{'=' * 70}\nCLAIM: {claim}")
-        try:
-            verdict, hits = check_claim(claim)
-        except RuntimeError as exc:
-            sys.exit(str(exc))
-        except torch.cuda.OutOfMemoryError:
-            sys.exit(f"Out of GPU memory running {MODEL}.")
-        except OSError as exc:
-            sys.exit(
-                f"Could not load {MODEL}: {exc}\n"
-                "If this is a gated-repo access error, run `huggingface-cli login` "
-                "with an account that has accepted the Llama 3.1 license."
-            )
-        except (ValueError, ValidationError) as exc:
-            print(f"  -> could not parse a verdict from the model: {exc}")
-            continue
-
-        print(f"retrieved: {', '.join(h['album'] for h in hits)}")
-        print(f"  -> {verdict.verdict}")
-        print(f"     evidence:    {verdict.evidence}")
-        print(f"     explanation: {verdict.explanation}")
-        if verdict.correction:
-            print(f"     correction:  {verdict.correction}")
-
-
 if __name__ == "__main__":
-    main()
+    claims = sys.argv[1:]
+    if not claims:
+        claims = DEMO_CLAIMS
+
+    for claim in claims:
+        print()
+        print("=" * 70)
+        print("CLAIM:", claim)
+        verdict, hits = check_claim(claim)
+
+        albums = []
+        for hit in hits:
+            albums.append(hit["album"])
+        print("retrieved:", ", ".join(albums))
+
+        if verdict is None:
+            print("  -> the model did not return valid JSON")
+            continue
+        print("  ->", verdict["verdict"])
+        print("     evidence:   ", verdict.get("evidence", ""))
+        print("     explanation:", verdict.get("explanation", ""))
+        if verdict.get("correction"):
+            print("     correction: ", verdict["correction"])
