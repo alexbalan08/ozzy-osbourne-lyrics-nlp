@@ -73,6 +73,7 @@ def build_index():
         song_rows.append({
             "title": song["title"],
             "album": song["album"],
+            "year": song["year"],
             "credits": song["credits"],
             "n_words": len(song["lyrics"].split()),
         })
@@ -150,8 +151,8 @@ if __name__ == "__main__":
 
     print("\n-- corpus search (grounds the critic) --")
     for hit in search("regret and looking back on a wasted life", "songs", k=3):
-        print(f"  {hit['score']:.3f}  {hit['title']} - {hit['album']}")
+        print(f"  {hit['score']:.3f}  {hit['title']} - {hit['album']} ({hit['year']})")
 
     print("\n-- song similarity (the demo) --")
     for hit in similar_songs("Crazy Train", k=3):
-        print(f"  {hit['score']:.3f}  {hit['title']} - {hit['album']}")
+        print(f"  {hit['score']:.3f}  {hit['title']} - {hit['album']} ({hit['year']})")

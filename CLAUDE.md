@@ -23,7 +23,8 @@ No test suite, no linter, no build step. Each script self-verifies when run dire
     python retrieval.py     # rebuild both indexes into Data/index/, then run smoke_test()
     python critic.py        # fact-check the 5 built-in DEMO_CLAIMS
     python critic.py "Crazy Train is on Blizzard of Ozz."   # claims as argv instead
-    python clean_lyrics.py  # regenerate darklyrics_clean.jsonl + corpus.txt
+    python clean_lyrics.py  # regenerate darklyrics_clean.jsonl + corpus.txt (needs Data/kb/albums.json)
+    python check_all.py     # run the critic over every song -> Data/critic_results.jsonl
 
 `retrieval.py` must have run at least once before `critic.py` works — otherwise `load_index` fails on the missing `Data/index/kb.npy`.
 
@@ -33,19 +34,20 @@ No test suite, no linter, no build step. Each script self-verifies when run dire
 
     scrape_data.py (documentation only)
       -> Data/darklyrics.jsonl          raw scrape
-    clean_lyrics.py
-      -> Data/darklyrics_clean.jsonl    {title, album, credits, lyrics}
+    clean_lyrics.py  (reads Data/kb/albums.json to decide what to keep)
+      -> Data/darklyrics_clean.jsonl    {title, album, year, credits, lyrics}
       -> Data/corpus.txt
     retrieval.py
       -> Data/index/{songs,kb}.{npy,json}
     critic.py                           consumes the kb index
+    check_all.py                        critic over every song -> Data/critic_results.jsonl
 
 ## Architecture
 
 **Two indexes, one embedding model** (`retrieval.py`). `BAAI/bge-base-en-v1.5` serves both:
 
-- `songs` — 181 vectors, one per whole song; powers `similar_songs()`.
-- `kb` — 13 vectors, one per album card; grounds the fact-checker.
+- `songs` — 122 vectors, one per whole song; powers `similar_songs()`.
+- `kb` — 12 vectors, one per album card; grounds the fact-checker.
 
 Vectors are L2-normalized, so the `vectors @ query_vector` dot product in `top_k` *is* cosine similarity.
 
@@ -57,7 +59,7 @@ One thing that is easy to get wrong:
 
 **The critic** (`critic.py`) retrieves `TOP_K=3` album cards, supplies them as the only permitted source of truth, and returns SUPPORTED / CONTRADICTED / UNVERIFIABLE.
 
-The model is **local** `meta-llama/Llama-3.1-8B-Instruct` in bf16 on the GPU via `transformers` (~16 GB of weights, ~15 s first load, cached in the HF hub cache). It has no native structured-output API, so the schema is enforced by hand in four coupled pieces:
+The model is **local** `Qwen/Qwen3-4B-Instruct-2507` in bf16 on the GPU via `transformers` (~8 GB of weights, cached in the HF hub cache). It has no native structured-output API, so the schema is enforced by hand in four coupled pieces:
 
 1. `SYSTEM` states the JSON shape and forbids any other text.
 2. `parse_verdict` cuts from the first `{` to the last `}` and `json.loads` it.
@@ -66,13 +68,14 @@ The model is **local** `meta-llama/Llama-3.1-8B-Instruct` in bf16 on the GPU via
 
 The schema exists only as text inside `SYSTEM` plus the keys the print block reads — change one, change the other.
 
+**The corpus is filtered by the KB.** `clean_lyrics.py` keeps a song only if its album is one of the 12 studio albums in `albums.json` (and takes the album's verified `year` from there), or if the title is in `KEEP_ANYWAY` — currently the two Ozzy originals that live outside the studio albums (*Under the Graveyard*, *Back On Earth*). Everything else in the raw scrape is a live album, compilation, covers album or Black Sabbath song and is dropped. Bonus tracks that darklyrics carries are listed under `bonus_tracks` in the KB so the critic can confirm them.
+
 **The KB encodes deliberate edge cases** (`Data/kb/albums.json`) that the critic's rules are written against:
 
 - *Diary of a Madman* has `release_date: null`, so its card reads "month-level only" and a claim about its exact day should be UNVERIFIABLE, not CONTRADICTED.
-- *Under Cover* has `is_covers: true`.
 - The KB holds original studio tracklists only, so a song absent from *every* card is UNVERIFIABLE. A claim naming one specific album is different — that album's tracklist is complete, so a song missing from it is genuinely CONTRADICTED.
 
-Llama-3.1-8B does not reliably honour the month-level rule and tends to answer CONTRADICTED there. That is a model-capability gap, not a prompt bug.
+The prompt was deliberately simplified (it now allows general knowledge and has few rules). Known consequences: the model answers CONTRADICTED rather than UNVERIFIABLE for month-level dates and for albums not in the KB, and the 4B model occasionally contradicts its own explanation. These are model/prompt trade-offs, not bugs to chase.
 
 ## Gotchas
 

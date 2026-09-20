@@ -15,6 +15,13 @@ HERE = Path(__file__).resolve().parent
 INFILE = HERE / "Data" / "darklyrics.jsonl"
 OUTFILE = HERE / "Data" / "darklyrics_clean.jsonl"
 CORPUS = HERE / "Data" / "corpus.txt"
+ALBUMS_FILE = HERE / "Data" / "kb" / "albums.json"
+
+# Ozzy originals that only appear outside the studio albums. title -> (album, year)
+KEEP_ANYWAY = {
+    "Under the Graveyard": ("Ordinary Man", 2020),  # released as a single a few months before the album
+    "Back On Earth": ("The Ozzman Cometh", 1997),  # new song recorded for the compilation
+}
 
 
 # ---------- characters to fix ----------
@@ -140,16 +147,29 @@ def clean_song(raw):
 
 
 if __name__ == "__main__":
+    # The KB is the verified list of Ozzy's studio albums: lowercase name -> (proper name, year).
+    albums = {}
+    for album in json.loads(ALBUMS_FILE.read_text(encoding="utf-8")):
+        albums[album["album"].lower()] = (album["album"], album["year"])
+
     songs = []
     for line in INFILE.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
         record = json.loads(line)
+        title = " ".join(normalize(record["title"]))
+
+        if record["album"].lower() in albums:
+            album, year = albums[record["album"].lower()]
+        elif title in KEEP_ANYWAY:
+            album, year = KEEP_ANYWAY[title]
+        else:
+            continue  # live album, compilation or Black Sabbath song: not an Ozzy studio original
+
         lyrics, credits = clean_song(record["lyrics"])
         if not lyrics:
             continue  # instrumentals leave nothing behind
-        title = " ".join(normalize(record["title"]))
-        songs.append({"title": title, "album": record["album"], "credits": credits, "lyrics": lyrics})
+        songs.append({"title": title, "album": album, "year": year, "credits": credits, "lyrics": lyrics})
 
     # One JSON object per line, for the code.
     jsonl = ""
@@ -160,7 +180,7 @@ if __name__ == "__main__":
     # One readable text file, for humans.
     chunks = []
     for song in songs:
-        chunks.append(f"### {song['title']} - {song['album']}\n\n{song['lyrics']}\n")
+        chunks.append(f"### {song['title']} - {song['album']} ({song['year']})\n\n{song['lyrics']}\n")
     CORPUS.write_text("\n".join(chunks), encoding="utf-8", newline="\n")
 
     total_words = 0

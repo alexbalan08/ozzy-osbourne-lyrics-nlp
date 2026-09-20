@@ -13,36 +13,26 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from retrieval import search
 
-MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
+MODEL_NAME = "Qwen/Qwen3-4B-Instruct-2507"
 MAX_NEW_TOKENS = 400  # the answer is a small JSON object, this is plenty of room
 TOP_K = 3  # how many album cards to show the model
 
 SYSTEM = """You fact-check claims about Ozzy Osbourne's discography.
 
 You will be given a claim and one or more ALBUM CARDS retrieved from a verified
-knowledge base built from Wikipedia. The cards are your ONLY source of truth.
+knowledge base. Use the cards as your main source of truth, but also your general knowledge.
 
-Rules:
-- Judge the claim strictly against the cards. Do not use anything you know about
-  Ozzy Osbourne from training. If the cards do not settle the claim, the verdict
-  is UNVERIFIABLE, even if you are confident you know the answer.
-- SUPPORTED: the cards confirm the claim.
-- CONTRADICTED: the cards state something incompatible with the claim.
-- UNVERIFIABLE: the cards do not address it, or are not precise enough to decide.
-- A card whose release date reads "month-level only" genuinely lacks a day. A
-  claim about that album's exact day is UNVERIFIABLE, not CONTRADICTED.
-- The knowledge base holds original studio-album tracklists only. A song missing
-  from the cards may still exist on a live album or compilation, so absence is
-  UNVERIFIABLE rather than CONTRADICTED.
-- Quote the exact line you relied on in `evidence`. If nothing applies, say so.
+Say whether the claim is right or wrong. If something in it is wrong (a year, a date,
+a song, an album), say what the correct fact is, using only facts from the cards.
+If the cards do not contain the correct fact, set correction to null. Never guess it.
+If you really cannot tell, say so.
+A song listed under "Bonus tracks" counts as being on that album.
 
-Respond with ONLY a single JSON object, no markdown fences and no text before or
-after it, matching exactly this schema:
-
-{"verdict": "SUPPORTED" | "CONTRADICTED" | "UNVERIFIABLE",
- "evidence": "<the exact line from a card that decides it>",
- "explanation": "<one or two sentences of reasoning>",
- "correction": "<the correct fact, only if CONTRADICTED, else null>"}"""
+Reply with only this JSON, nothing else:
+{"verdict": "SUPPORTED" or "CONTRADICTED" or "UNVERIFIABLE",
+ "evidence": "the card line you used",
+ "explanation": "one sentence",
+ "correction": "the correct fact if the claim is wrong, else null"}"""
 
 REPAIR = (
     "That was not a single valid JSON object matching the schema. "
@@ -54,10 +44,10 @@ DEMO_CLAIMS = [
     "Bark at the Moon was released in 1985.",  # wrong year, the card should contradict it
     "Diary of a Madman was released on 7 November 1981.",  # the KB deliberately has no day for this one
     "War Pigs is a track on Ozzy's album Blizzard of Ozz.",  # a Sabbath song, not on that tracklist
-    "Under Cover is an album of songs written by other artists.",  # covers-album flag
+    "Blizzard of Ozz has nine tracks.",  # track count, from the "Tracks (9)" line
 ]
 
-# Loaded once, when this file starts. Needs a CUDA GPU with ~16 GB free. Takes ~15 seconds.
+# Loaded once, when this file starts. Needs a CUDA GPU with ~8 GB free.
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, dtype=torch.bfloat16, device_map="cuda")
 
