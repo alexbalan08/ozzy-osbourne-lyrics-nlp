@@ -1,10 +1,10 @@
-"""Embed the songs and the album cards, and search them.
+#Embed the songs and the album cards, and search them.
 
-Press Run to build the two indexes. Import search / similar_songs to query them.
+#Press Run to build the two indexes. Import search / similar_songs to query them.
 
-    songs   one vector per whole song (181)   -> song similarity
-    kb      one vector per album card (13)    -> facts for the critic
-"""
+#songs   one vector per whole song (181)   
+#kb      one vector per album card (13)    
+
 
 import json
 import time

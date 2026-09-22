@@ -44,6 +44,8 @@ MOJIBAKE_CODECS = ["cp1252", "mac_roman", "latin-1"]
 # Control characters (except tab and newline) that should never be in lyrics.
 CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 
+FOOTER = "OZZY OSBOURNE LYRICS"
+
 
 # ---------- bracketed things ----------
 
@@ -134,6 +136,8 @@ def clean_song(raw):
     body = []
     credits = []
     for line in normalize(raw):
+        if line == FOOTER:
+            continue
         bracket = BRACKET_LINE.match(line)
         if bracket:
             # A whole-line bracket is either a credit we keep or noise we drop. Never lyrics.
